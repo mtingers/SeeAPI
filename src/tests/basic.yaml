@@ -1,0 +1,51 @@
+compiler:
+  output-name: seeapi-test-basic
+  cflags: -Wall -O2
+  ldflags: -L/usr/local/include -lm
+  ldlibs:
+
+import:
+  importtest: importtest
+  _:
+    - test 
+
+log:
+  file: /tmp/test-basic.log
+  stdout: true
+  stderr: false
+  syslog: false
+
+functions F:
+  read-version:
+    args: {path: str}
+    <|file.read: $path
+
+  c-file-example:
+    args: {value: str}
+    cmodule.define:
+      path: filename.c
+      function-name: echo 
+      function-args: {$value}
+
+variables V:
+  $version<|F.read-version: version.txt
+
+routes:
+  action /version:
+    <|F.get-version:
+      path: $query-params.path
+      
+  get /json-example:
+    header:
+      seeapiversion: $F.read-version
+    <|json:
+      hello: world
+      goodbye: universe 
+
+  get /inlinecode:
+    $output<|code.define: |
+      i32 x = 123;
+      i32 y = 321;
+      return x * y;
+    <|json:
+      result: $output

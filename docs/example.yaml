@@ -1,0 +1,222 @@
+compiler:
+  output-name: seeapi-example
+  cflags: -Wall -O2
+  ldflags: -L/usr/local/include -lm
+  ldlibs: ...
+
+# example of how to import from other files
+import:
+  # import from foo.yaml as namespace foo
+  foo: foo
+  # import from bar.yaml as namespace bar
+  bar: bar
+  # import into this namespace like it is inline of this file
+  _:
+    # all.yaml
+    - all
+    # all2.yaml
+    - all2
+
+# global handlers
+global:
+  # log to a file, stdout/err, or syslog
+  log:
+    file: /path/to/file.log
+    stdout: true
+    stderr: false
+    syslog: false
+
+# define a redis adapter connection
+redis red:
+  type: redis
+  host:
+  user:
+  pass:
+
+# define a postgresql adapter connection
+postgres db:
+  type: postgres
+  host:
+  user:
+  pass:
+  schema:
+  dbname:
+
+
+
+# define some variables in namespace "V", can be assigned using other functions
+variables V:
+  # defines a variable named V.version
+  $version<|file.read: version.txt
+
+# define functions in namespace "F"
+functions F:
+  #######################
+  # functions follow the following yaml structure
+  name:
+    args: {function-args1: str, function-args2: str}
+    # args: {}
+    module.function:
+      argname1: $function-args2
+      argname2: $function-args1 
+  #######################
+
+  c-file-example:
+    args: {}
+    cmodule.define:
+      path: filename.c
+      function-name: function_name
+      function-args: {foo: str, bar: str, baz: u32}
+
+  postgres-query-example:
+    args: {}
+    db.query:
+      sql: >
+        SELECT id, name
+        FROM users
+        WHERE id > 1 AND name != 'foo'
+        LIMIT 10
+    <|db.exec-file:
+        sql-file: query1.sql
+
+
+  # example with args 
+  fetchwrap:
+    args: {foo: str, bar: str}
+    <|fetch.get:
+      host: https://.../
+      headers:
+        token: xyz...
+      params: {a: 1, b: 2, foo: $args.foo, bar: $args.bar}
+
+
+# define the HTTP routes and how they are handled
+routes:
+  #######################################
+  # routes take on the following format:
+  action /path:
+    query-params: {a: a, b: b}
+    <|function-name:
+      argname1: foo
+      argname2: etc...
+      argname3: $query-params.a
+  #######################################
+      
+  # triggers on GET /see, runs queryA from F, returns F.c() value to HTTP client
+  get /see:
+    F.queryA: {}
+    <|F.c: {foo: 1, bar: 2, baz: 3}
+
+  # Use function from F, reverse proxy to host and return it's response
+  get /foo:
+    F.queryA: {}
+    <|reverse-proxy:
+      host: https://.../
+
+  # query external API directly
+  get /external:
+    <|fetch.get:
+      host: https://.../
+      headers:
+        token: xyz...
+      # or basic auth
+      basic-auth:
+        username: xyz
+        password: xyz
+      # query params
+      params: {a: 1, b: 2}
+      # or data for post
+      # data: {a: 1, b: 2}
+      # or json get
+      # json: {a: 1, b: 2}
+
+  get /externalwrap:
+    <|F.fetchwrap:
+        foo: myfoo
+        bar: mybar
+
+  # example regex query string matching and return json
+  get /foo/<regex:foo.*[0-9A-z]+?(xy*(@#!)*7$)*(@"'*#$@)00)>:
+    <|json:
+      hello: regex 
+
+  # query database from ID in GET query and return results as json
+  get /foo/<i32:id>:
+    <|db.query:
+      sql: select * from foo where id=?
+      params: [$id]
+      format: json 
+
+  # return raw data of exec'd command piped to othercommand 
+  get /bar:
+    <|exec: /command | othercommand
+
+  # set http content-type, read entire file and send to client
+  get /read:
+    header:
+      content-type: xyz
+    <|file.read: /path/to/file
+
+
+  # set http header, stream file contents to client
+  get /stream:
+    http.header:
+      content-type: xyz
+    <|file.stream:
+      path: /path/to/file
+
+  # write file using POST data, insert sql, return json
+  post /write:
+    file.write:
+      data: $POST.fieldname.childfield
+      path: /path/to/file.txt
+    foo.db.query:
+      sql: insert into sometable (a, b) values (?, ?)
+      params: [$POST.a || fallbackvalue, $V.version]
+      # params: [$POST.a, $mod.V.version]
+    <|json:
+        ok: yep we good 👌
+
+#  # orm-like query example, just an idea but unsure of at this time and may not implement
+#  get /resultset:
+#    db.orm.foo.select:
+#      fields:
+#        - id
+#      filters:
+#        like:
+#          key: username
+#          value: "%foo%"
+
+  # return exec stdout as json 
+  get /bar2:
+    # store exec command output in $result variable
+    $result<|exec:
+      cmd: ...
+    <|json:
+        foo: 123
+        data: $result.stdout
+        example: \$example of escaping a dollar sign for string literal
+
+  # redis set/hset 
+  get /kv/<str:namespace>:
+    red.set:
+      key: foo
+      # example default value is string "unset" if $GET.foo is blank 
+      value: $GET.foo||unset
+    foo.red.hset:
+      name: ...
+      value:
+        when: then
+        who: me
+        count: 2
+
+  # inline C code 
+  # internally this emits a C function to build 
+  # the executable at compile time
+  get /inlinecode/<i32:count>:
+    $x<|code.c: |
+      i32 x = 123;
+      i32 y = 321;
+      return x * y + $count;
+    <|json:
+      x: $x
